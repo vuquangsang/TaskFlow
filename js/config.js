@@ -13,3 +13,4 @@ window.TASKFLOW_CONFIG = {
     SUPABASE_ANON_KEY: '',
     VAPID_PUBLIC_KEY: ''
 };
+
