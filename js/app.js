@@ -8,7 +8,8 @@
 
     const STORAGE_KEYS = {
         TASKS: 'taskflow_tasks_v1',
-        THEME: 'taskflow_theme_v1'
+        THEME: 'taskflow_theme_v1',
+        SUPABASE_CONFIG: 'taskflow_supabase_cfg_v1'
     };
 
     const PRIORITY_WEIGHT = {
@@ -40,12 +41,23 @@
         },
         editingTaskId: null,
         deletingTaskId: null,
-        reminderTimerId: null
+        reminderTimerId: null,
+        deferredInstallPrompt: null,
+        authMode: 'signin',
+        user: null,
+        supabase: null,
+        isSyncing: false,
+        realtimeChannel: null
     };
 
     // DOM Elements
     const dom = {
         html: document.documentElement,
+        metaThemeColor: document.getElementById('metaThemeColor'),
+        installPwaBtn: document.getElementById('installPwaBtn'),
+        authSyncBtn: document.getElementById('authSyncBtn'),
+        syncStatusDot: document.getElementById('syncStatusDot'),
+        authSyncBtnText: document.getElementById('authSyncBtnText'),
         notifyToggleBtn: document.getElementById('notifyToggleBtn'),
         themeToggleBtn: document.getElementById('themeToggleBtn'),
         openAddModalBtn: document.getElementById('openAddModalBtn'),
@@ -109,6 +121,28 @@
         closeRestoreModalBtn: document.getElementById('closeRestoreModalBtn'),
         cancelRestoreBtn: document.getElementById('cancelRestoreBtn'),
         confirmRestoreBtn: document.getElementById('confirmRestoreBtn'),
+
+        // Auth & Cloud Sync Modal (Phase 3)
+        authModal: document.getElementById('authModal'),
+        closeAuthModalBtn: document.getElementById('closeAuthModalBtn'),
+        authAccountPanel: document.getElementById('authAccountPanel'),
+        authLoginPanel: document.getElementById('authLoginPanel'),
+        authUserEmail: document.getElementById('authUserEmail'),
+        lastSyncTimeText: document.getElementById('lastSyncTimeText'),
+        manualSyncNowBtn: document.getElementById('manualSyncNowBtn'),
+        signOutBtn: document.getElementById('signOutBtn'),
+        authModeTabs: document.getElementById('authModeTabs'),
+        authForm: document.getElementById('authForm'),
+        authEmail: document.getElementById('authEmail'),
+        authPassword: document.getElementById('authPassword'),
+        authMessage: document.getElementById('authMessage'),
+        authSubmitBtn: document.getElementById('authSubmitBtn'),
+        supabaseConfigDetails: document.getElementById('supabaseConfigDetails'),
+        cfgSupabaseUrl: document.getElementById('cfgSupabaseUrl'),
+        cfgSupabaseAnonKey: document.getElementById('cfgSupabaseAnonKey'),
+        cfgSaveMessage: document.getElementById('cfgSaveMessage'),
+        saveSupabaseConfigBtn: document.getElementById('saveSupabaseConfigBtn'),
+        clearSupabaseConfigBtn: document.getElementById('clearSupabaseConfigBtn'),
 
         // Toast
         toastContainer: document.getElementById('toastContainer')
@@ -264,6 +298,11 @@
     /* ==========================================================================
        Theme Management (Light / Dark Mode)
        ========================================================================== */
+    function updateMetaThemeColor(theme) {
+        if (!dom.metaThemeColor) return;
+        dom.metaThemeColor.setAttribute('content', theme === 'dark' ? '#111827' : '#4f46e5');
+    }
+
     function initTheme() {
         const savedTheme = localStorage.getItem(STORAGE_KEYS.THEME);
         if (savedTheme === 'dark' || savedTheme === 'light') {
@@ -271,6 +310,7 @@
         } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
             dom.html.setAttribute('data-theme', 'dark');
         }
+        updateMetaThemeColor(dom.html.getAttribute('data-theme'));
     }
 
     function toggleTheme() {
@@ -278,6 +318,7 @@
         const next = current === 'dark' ? 'light' : 'dark';
         dom.html.setAttribute('data-theme', next);
         localStorage.setItem(STORAGE_KEYS.THEME, next);
+        updateMetaThemeColor(next);
     }
 
     /* ==========================================================================
@@ -635,6 +676,8 @@
         const safePriority = VALID_PRIORITIES.includes(priority) ? priority : 'Medium';
         const safeStatus = VALID_STATUSES.includes(status) ? status : 'Todo';
 
+        let savedTaskRef = null;
+
         if (state.editingTaskId) {
             const idx = state.tasks.findIndex(t => t.id === state.editingTaskId);
             if (idx !== -1) {
@@ -656,9 +699,11 @@
                     status: safeStatus,
                     updatedAt: Date.now()
                 };
+                savedTaskRef = state.tasks[idx];
                 showToast('Đã cập nhật công việc thành công!');
             }
         } else {
+            const nowTs = Date.now();
             const newTask = {
                 id: generateId(),
                 title,
@@ -669,9 +714,11 @@
                 notifiedForKey: null,
                 priority: safePriority,
                 status: safeStatus,
-                createdAt: Date.now()
+                createdAt: nowTs,
+                updatedAt: nowTs
             };
             state.tasks.unshift(newTask);
+            savedTaskRef = newTask;
             showToast('Đã thêm công việc mới!');
         }
 
@@ -679,6 +726,9 @@
         renderAll();
         checkReminders();
         closeTaskModal();
+        if (savedTaskRef) {
+            pushSingleTaskToCloud(savedTaskRef);
+        }
     }
 
     function openDeleteModal(id) {
@@ -697,11 +747,13 @@
 
     function confirmDeleteTask() {
         if (!state.deletingTaskId) return;
-        state.tasks = state.tasks.filter(t => t.id !== state.deletingTaskId);
+        const deletedId = state.deletingTaskId;
+        state.tasks = state.tasks.filter(t => t.id !== deletedId);
         saveTasks();
         renderAll();
         closeDeleteModal();
         showToast('Đã xóa công việc.', 'danger');
+        deleteSingleTaskFromCloud(deletedId);
     }
 
     function updateTaskStatusQuick(id, newStatus) {
@@ -712,6 +764,7 @@
         saveTasks();
         renderAll();
         showToast(`Đã chuyển trạng thái sang "${newStatus}"`);
+        pushSingleTaskToCloud(task);
     }
 
     function openRestoreModal() {
@@ -729,6 +782,7 @@
         renderAll();
         closeRestoreModal();
         showToast('Đã khôi phục dữ liệu mẫu!');
+        replaceCloudTasksForRestore(state.tasks);
     }
 
     function resetAllFilters() {
@@ -847,6 +901,7 @@
 
         if (hasNotifiedChanges) {
             saveTasks();
+            pushMultipleTasksToCloud(state.tasks.filter(t => t.notifiedForKey));
         }
 
         // Refresh stats and due badges so tasks crossing their deadline immediately show Overdue
@@ -858,6 +913,624 @@
             clearInterval(state.reminderTimerId);
         }
         state.reminderTimerId = setInterval(checkReminders, 15000);
+    }
+
+    /* ==========================================================================
+       Supabase Authentication & Multi-Device Cloud Sync (Phase 3)
+       ========================================================================== */
+    function getSupabaseCredentials() {
+        let url = '';
+        let anonKey = '';
+
+        if (window.TASKFLOW_CONFIG && typeof window.TASKFLOW_CONFIG === 'object') {
+            url = String(window.TASKFLOW_CONFIG.SUPABASE_URL || '').trim();
+            anonKey = String(window.TASKFLOW_CONFIG.SUPABASE_ANON_KEY || '').trim();
+        }
+
+        try {
+            const rawSaved = localStorage.getItem(STORAGE_KEYS.SUPABASE_CONFIG);
+            if (rawSaved) {
+                const parsed = JSON.parse(rawSaved);
+                if (parsed && typeof parsed === 'object') {
+                    if (parsed.url && String(parsed.url).trim()) {
+                        url = String(parsed.url).trim();
+                    }
+                    if (parsed.anonKey && String(parsed.anonKey).trim()) {
+                        anonKey = String(parsed.anonKey).trim();
+                    }
+                }
+            }
+        } catch (_) {}
+
+        return { url, anonKey };
+    }
+
+    function isLikelyServiceRoleKey(keyStr) {
+        if (!keyStr || typeof keyStr !== 'string') return false;
+        if (keyStr.includes('service_role')) return true;
+        const parts = keyStr.split('.');
+        if (parts.length === 3) {
+            try {
+                const payloadJson = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
+                const payload = JSON.parse(payloadJson);
+                if (payload && payload.role === 'service_role') {
+                    return true;
+                }
+            } catch (_) {}
+        }
+        return false;
+    }
+
+    function taskToDbRow(task, userId) {
+        const dueDate = isValidDateString(task.dueDate) ? task.dueDate : getTodayDateString();
+        const dueTime = isValidTimeString(task.dueTime) ? task.dueTime : '23:59';
+        const dueMs = getTaskDueTimestamp(dueDate, dueTime);
+        const dueAtIso = dueMs !== null ? new Date(dueMs).toISOString() : new Date().toISOString();
+
+        const remindOffset = VALID_REMIND_OFFSETS.includes(Number(task.remindOffset))
+            ? Number(task.remindOffset)
+            : -1;
+        const remindAtIso = (remindOffset >= 0 && dueMs !== null)
+            ? new Date(dueMs - remindOffset * 60000).toISOString()
+            : null;
+
+        const currentRemindKey = buildReminderKey(dueDate, dueTime, remindOffset);
+        const reminderSent = Boolean(remindOffset >= 0 && task.notifiedForKey === currentRemindKey);
+
+        const createdMs = typeof task.createdAt === 'number' && Number.isFinite(task.createdAt)
+            ? task.createdAt
+            : Date.now();
+        const updatedMs = typeof task.updatedAt === 'number' && Number.isFinite(task.updatedAt)
+            ? task.updatedAt
+            : createdMs;
+
+        return {
+            id: task.id,
+            user_id: userId,
+            title: task.title,
+            description: task.description || '',
+            due_date: dueDate,
+            due_time: dueTime,
+            due_at: dueAtIso,
+            remind_offset_minutes: remindOffset,
+            remind_at: remindAtIso,
+            reminder_sent: reminderSent,
+            priority: VALID_PRIORITIES.includes(task.priority) ? task.priority : 'Medium',
+            status: VALID_STATUSES.includes(task.status) ? task.status : 'Todo',
+            created_at: new Date(createdMs).toISOString(),
+            updated_at: new Date(updatedMs).toISOString()
+        };
+    }
+
+    function dbRowToTask(row) {
+        if (!row || typeof row !== 'object') return null;
+        const dueDate = isValidDateString(row.due_date) ? row.due_date : getTodayDateString();
+        const dueTime = isValidTimeString(row.due_time) ? row.due_time : '23:59';
+        const parsedOffset = Number(row.remind_offset_minutes);
+        const remindOffset = VALID_REMIND_OFFSETS.includes(parsedOffset) ? parsedOffset : -1;
+        const currentRemindKey = buildReminderKey(dueDate, dueTime, remindOffset);
+        const notifiedForKey = (row.reminder_sent && remindOffset >= 0) ? currentRemindKey : null;
+
+        const createdMs = row.created_at ? Date.parse(row.created_at) : Date.now();
+        const updatedMs = row.updated_at ? Date.parse(row.updated_at) : createdMs;
+
+        return normalizeTask({
+            id: row.id,
+            title: row.title,
+            description: row.description || '',
+            dueDate,
+            dueTime,
+            remindOffset,
+            notifiedForKey,
+            priority: row.priority,
+            status: row.status,
+            createdAt: Number.isFinite(createdMs) ? createdMs : Date.now(),
+            updatedAt: Number.isFinite(updatedMs) ? updatedMs : Date.now()
+        });
+    }
+
+    function updateSyncUiState(status = 'idle', detailText = '') {
+        if (!dom.authSyncBtn || !dom.syncStatusDot || !dom.authSyncBtnText) return;
+
+        dom.syncStatusDot.classList.remove('is-online', 'is-syncing', 'is-error');
+
+        if (state.user) {
+            if (status === 'syncing' || state.isSyncing) {
+                dom.syncStatusDot.classList.add('is-syncing');
+                dom.authSyncBtnText.textContent = 'Đang đồng bộ...';
+            } else if (status === 'error') {
+                dom.syncStatusDot.classList.add('is-error');
+                dom.authSyncBtnText.textContent = 'Lỗi đồng bộ';
+            } else {
+                dom.syncStatusDot.classList.add('is-online');
+                dom.authSyncBtnText.textContent = 'Đã đồng bộ';
+            }
+
+            if (dom.authAccountPanel && dom.authLoginPanel) {
+                dom.authAccountPanel.classList.remove('hidden');
+                dom.authLoginPanel.classList.add('hidden');
+            }
+            if (dom.authUserEmail) {
+                dom.authUserEmail.textContent = state.user.email || 'Tài khoản đã đăng nhập';
+            }
+            if (dom.lastSyncTimeText && detailText) {
+                dom.lastSyncTimeText.textContent = detailText;
+            }
+        } else {
+            dom.authSyncBtnText.textContent = 'Đồng bộ';
+            if (dom.authAccountPanel && dom.authLoginPanel) {
+                dom.authAccountPanel.classList.add('hidden');
+                dom.authLoginPanel.classList.remove('hidden');
+            }
+        }
+    }
+
+    async function syncTasksWithCloud(showSuccessToast = false) {
+        if (!state.supabase || !state.user || state.isSyncing) return;
+
+        state.isSyncing = true;
+        updateSyncUiState('syncing', 'Đang đồng bộ dữ liệu hai chiều với Supabase...');
+
+        try {
+            const { data: remoteRows, error: fetchError } = await state.supabase
+                .from('tasks')
+                .select('*')
+                .eq('user_id', state.user.id);
+
+            if (fetchError) throw fetchError;
+
+            const remoteMap = new Map();
+            (remoteRows || []).forEach(row => {
+                const task = dbRowToTask(row);
+                if (task) remoteMap.set(task.id, task);
+            });
+
+            const localMap = new Map();
+            state.tasks.forEach(task => {
+                const normalized = normalizeTask(task);
+                if (normalized) localMap.set(normalized.id, normalized);
+            });
+
+            const mergedTasks = [];
+            const tasksToUpsertToCloud = [];
+            const allIds = new Set([...localMap.keys(), ...remoteMap.keys()]);
+
+            allIds.forEach(id => {
+                const localTask = localMap.get(id);
+                const remoteTask = remoteMap.get(id);
+
+                if (localTask && remoteTask) {
+                    const localTime = localTask.updatedAt || localTask.createdAt || 0;
+                    const remoteTime = remoteTask.updatedAt || remoteTask.createdAt || 0;
+
+                    if (localTime > remoteTime) {
+                        mergedTasks.push(localTask);
+                        tasksToUpsertToCloud.push(taskToDbRow(localTask, state.user.id));
+                    } else {
+                        mergedTasks.push(remoteTask);
+                    }
+                } else if (localTask && !remoteTask) {
+                    // Preserve local tasks that don't exist on cloud yet
+                    mergedTasks.push(localTask);
+                    tasksToUpsertToCloud.push(taskToDbRow(localTask, state.user.id));
+                } else if (!localTask && remoteTask) {
+                    // Pull cloud tasks from other devices into local state
+                    mergedTasks.push(remoteTask);
+                }
+            });
+
+            if (tasksToUpsertToCloud.length > 0) {
+                const { error: upsertError } = await state.supabase
+                    .from('tasks')
+                    .upsert(tasksToUpsertToCloud, { onConflict: 'id' });
+                if (upsertError) throw upsertError;
+            }
+
+            state.tasks = mergedTasks;
+            saveTasks();
+            renderAll();
+
+            const nowStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            state.isSyncing = false;
+            updateSyncUiState('online', `Đã đồng bộ thành công lúc ${nowStr} (${mergedTasks.length} công việc)`);
+
+            if (showSuccessToast) {
+                showToast('Đã đồng bộ dữ liệu đám mây thành công!');
+            }
+        } catch (err) {
+            console.warn('Lỗi đồng bộ Supabase:', err);
+            state.isSyncing = false;
+            updateSyncUiState('error', `Lỗi đồng bộ: ${err.message || 'Không thể kết nối tới bảng tasks'}`);
+            if (showSuccessToast) {
+                showToast('Không thể đồng bộ đám mây. Dữ liệu vẫn được lưu an toàn tại máy.', 'danger');
+            }
+        }
+    }
+
+    async function pushSingleTaskToCloud(task) {
+        if (!state.supabase || !state.user || !task) return;
+        try {
+            const row = taskToDbRow(task, state.user.id);
+            const { error } = await state.supabase
+                .from('tasks')
+                .upsert([row], { onConflict: 'id' });
+            if (error) throw error;
+            const nowStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+            updateSyncUiState('online', `Đã lưu lên đám mây lúc ${nowStr}`);
+        } catch (err) {
+            console.warn('Không thể đẩy task lên Supabase:', err);
+            updateSyncUiState('error', 'Lưu đám mây tạm gián đoạn (đã lưu tại máy)');
+        }
+    }
+
+    async function pushMultipleTasksToCloud(tasks) {
+        if (!state.supabase || !state.user || !Array.isArray(tasks) || tasks.length === 0) return;
+        try {
+            const rows = tasks.map(t => taskToDbRow(t, state.user.id));
+            const { error } = await state.supabase
+                .from('tasks')
+                .upsert(rows, { onConflict: 'id' });
+            if (error) throw error;
+        } catch (err) {
+            console.warn('Không thể cập nhật hàng loạt lên Supabase:', err);
+        }
+    }
+
+    async function deleteSingleTaskFromCloud(taskId) {
+        if (!state.supabase || !state.user || !taskId) return;
+        try {
+            const { error } = await state.supabase
+                .from('tasks')
+                .delete()
+                .eq('id', taskId)
+                .eq('user_id', state.user.id);
+            if (error) throw error;
+        } catch (err) {
+            console.warn('Không thể xóa task trên Supabase:', err);
+        }
+    }
+
+    async function replaceCloudTasksForRestore(newTasks) {
+        if (!state.supabase || !state.user) return;
+        try {
+            await state.supabase
+                .from('tasks')
+                .delete()
+                .eq('user_id', state.user.id);
+            await pushMultipleTasksToCloud(newTasks);
+        } catch (err) {
+            console.warn('Không thể khôi phục mẫu trên Supabase:', err);
+        }
+    }
+
+    function subscribeRealtimeTasks() {
+        if (!state.supabase || !state.user) return;
+        if (state.realtimeChannel) {
+            try {
+                state.supabase.removeChannel(state.realtimeChannel);
+            } catch (_) {}
+            state.realtimeChannel = null;
+        }
+
+        try {
+            const channel = state.supabase
+                .channel('taskflow_tasks_changes')
+                .on(
+                    'postgres_changes',
+                    {
+                        event: '*',
+                        schema: 'public',
+                        table: 'tasks',
+                        filter: `user_id=eq.${state.user.id}`
+                    },
+                    () => {
+                        syncTasksWithCloud(false);
+                    }
+                );
+            if (channel && typeof channel.subscribe === 'function') {
+                channel.subscribe();
+                state.realtimeChannel = channel;
+            }
+        } catch (_) {}
+    }
+
+    async function initSupabaseClient() {
+        const { url, anonKey } = getSupabaseCredentials();
+
+        if (dom.cfgSupabaseUrl) dom.cfgSupabaseUrl.value = url;
+        if (dom.cfgSupabaseAnonKey) dom.cfgSupabaseAnonKey.value = anonKey;
+
+        if (!url || !anonKey) {
+            state.supabase = null;
+            state.user = null;
+            updateSyncUiState('idle');
+            if (dom.supabaseConfigDetails) {
+                dom.supabaseConfigDetails.open = true;
+            }
+            return false;
+        }
+
+        if (isLikelyServiceRoleKey(anonKey)) {
+            console.error('Bảo mật: Phát hiện service_role key ở frontend! Đã chặn kết nối.');
+            state.supabase = null;
+            state.user = null;
+            updateSyncUiState('error');
+            return false;
+        }
+
+        if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+            console.warn('Thư viện Supabase JS chưa sẵn sàng (có thể đang offline).');
+            state.supabase = null;
+            updateSyncUiState('idle');
+            return false;
+        }
+
+        try {
+            state.supabase = window.supabase.createClient(url, anonKey, {
+                auth: {
+                    persistSession: true,
+                    autoRefreshToken: true
+                }
+            });
+
+            const { data: sessionData } = await state.supabase.auth.getSession();
+            state.user = sessionData?.session?.user || null;
+            updateSyncUiState(state.user ? 'online' : 'idle');
+
+            if (state.user) {
+                await syncTasksWithCloud(false);
+                subscribeRealtimeTasks();
+            }
+
+            state.supabase.auth.onAuthStateChange((event, session) => {
+                const nextUser = session?.user || null;
+                const prevUserId = state.user?.id || null;
+                state.user = nextUser;
+
+                if (nextUser && nextUser.id !== prevUserId) {
+                    updateSyncUiState('online');
+                    syncTasksWithCloud(false);
+                    subscribeRealtimeTasks();
+                } else if (!nextUser) {
+                    if (state.realtimeChannel && state.supabase) {
+                        try {
+                            state.supabase.removeChannel(state.realtimeChannel);
+                        } catch (_) {}
+                        state.realtimeChannel = null;
+                    }
+                    updateSyncUiState('idle');
+                }
+            });
+
+            return true;
+        } catch (err) {
+            console.warn('Không thể khởi tạo Supabase Client:', err);
+            state.supabase = null;
+            updateSyncUiState('error');
+            return false;
+        }
+    }
+
+    function showAuthFeedback(el, message, type = 'error') {
+        if (!el) return;
+        if (!message) {
+            el.textContent = '';
+            el.classList.add('hidden');
+            el.classList.remove('is-success');
+            return;
+        }
+        el.textContent = message;
+        el.classList.toggle('is-success', type === 'success');
+        el.classList.remove('hidden');
+    }
+
+    function openAuthModal() {
+        if (!dom.authModal) return;
+        showAuthFeedback(dom.authMessage, '');
+        showAuthFeedback(dom.cfgSaveMessage, '');
+
+        const { url, anonKey } = getSupabaseCredentials();
+        if (dom.cfgSupabaseUrl) dom.cfgSupabaseUrl.value = url;
+        if (dom.cfgSupabaseAnonKey) dom.cfgSupabaseAnonKey.value = anonKey;
+        if (dom.supabaseConfigDetails) {
+            dom.supabaseConfigDetails.open = Boolean(!url || !anonKey);
+        }
+
+        updateSyncUiState(state.user ? 'online' : 'idle');
+        dom.authModal.classList.remove('hidden');
+    }
+
+    function closeAuthModal() {
+        if (!dom.authModal) return;
+        dom.authModal.classList.add('hidden');
+    }
+
+    function setAuthMode(mode) {
+        state.authMode = mode === 'signup' ? 'signup' : 'signin';
+        if (dom.authModeTabs) {
+            dom.authModeTabs.querySelectorAll('.tab-btn').forEach(btn => {
+                const active = btn.dataset.authMode === state.authMode;
+                btn.classList.toggle('active', active);
+                btn.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+        }
+        if (dom.authSubmitBtn) {
+            dom.authSubmitBtn.textContent = state.authMode === 'signup'
+                ? 'Đăng ký tài khoản mới'
+                : 'Đăng nhập & Đồng bộ';
+        }
+        showAuthFeedback(dom.authMessage, '');
+    }
+
+    async function handleAuthFormSubmit(e) {
+        e.preventDefault();
+        showAuthFeedback(dom.authMessage, '');
+
+        const email = dom.authEmail ? dom.authEmail.value.trim() : '';
+        const password = dom.authPassword ? dom.authPassword.value : '';
+
+        if (!email || !password || password.length < 6) {
+            showAuthFeedback(dom.authMessage, 'Vui lòng nhập email hợp lệ và mật khẩu tối thiểu 6 ký tự.');
+            return;
+        }
+
+        if (!state.supabase) {
+            const initialized = await initSupabaseClient();
+            if (!initialized || !state.supabase) {
+                showAuthFeedback(
+                    dom.authMessage,
+                    'Chưa cấu hình kết nối Supabase. Vui lòng mở mục "Cấu hình kết nối Supabase" bên dưới để nhập Project URL và Anon Key.'
+                );
+                if (dom.supabaseConfigDetails) dom.supabaseConfigDetails.open = true;
+                return;
+            }
+        }
+
+        if (dom.authSubmitBtn) dom.authSubmitBtn.disabled = true;
+
+        try {
+            if (state.authMode === 'signup') {
+                const { data, error } = await state.supabase.auth.signUp({ email, password });
+                if (error) throw error;
+
+                if (data?.session?.user) {
+                    state.user = data.session.user;
+                    updateSyncUiState('online');
+                    await syncTasksWithCloud(true);
+                    subscribeRealtimeTasks();
+                } else {
+                    showAuthFeedback(
+                        dom.authMessage,
+                        'Đăng ký thành công! Vui lòng kiểm tra hộp thư email để xác nhận tài khoản trước khi đăng nhập.',
+                        'success'
+                    );
+                }
+            } else {
+                const { data, error } = await state.supabase.auth.signInWithPassword({ email, password });
+                if (error) throw error;
+
+                if (data?.user) {
+                    state.user = data.user;
+                    updateSyncUiState('online');
+                    await syncTasksWithCloud(true);
+                    subscribeRealtimeTasks();
+                    if (dom.authForm) dom.authForm.reset();
+                }
+            }
+        } catch (err) {
+            showAuthFeedback(dom.authMessage, err.message || 'Không thể xác thực tài khoản. Vui lòng kiểm tra lại thông tin.');
+        } finally {
+            if (dom.authSubmitBtn) dom.authSubmitBtn.disabled = false;
+        }
+    }
+
+    async function handleSignOut() {
+        if (!state.supabase) return;
+        try {
+            await state.supabase.auth.signOut();
+        } catch (_) {}
+        state.user = null;
+        if (state.realtimeChannel && state.supabase) {
+            try {
+                state.supabase.removeChannel(state.realtimeChannel);
+            } catch (_) {}
+            state.realtimeChannel = null;
+        }
+        updateSyncUiState('idle');
+        showToast('Đã đăng xuất. Dữ liệu trên thiết bị này vẫn được giữ nguyên.');
+    }
+
+    async function handleSaveSupabaseConfig() {
+        const url = dom.cfgSupabaseUrl ? dom.cfgSupabaseUrl.value.trim() : '';
+        const anonKey = dom.cfgSupabaseAnonKey ? dom.cfgSupabaseAnonKey.value.trim() : '';
+
+        if (!url || !anonKey) {
+            showAuthFeedback(dom.cfgSaveMessage, 'Vui lòng nhập đầy đủ Supabase Project URL và Public Anon Key.');
+            return;
+        }
+
+        if (!/^https?:\/\/.+/i.test(url)) {
+            showAuthFeedback(dom.cfgSaveMessage, 'Supabase URL phải bắt đầu bằng https://');
+            return;
+        }
+
+        if (isLikelyServiceRoleKey(anonKey)) {
+            showAuthFeedback(dom.cfgSaveMessage, 'Cảnh báo bảo mật: Không được phép sử dụng service_role key ở frontend! Hãy dùng anon public key.');
+            return;
+        }
+
+        try {
+            localStorage.setItem(STORAGE_KEYS.SUPABASE_CONFIG, JSON.stringify({ url, anonKey }));
+            const ok = await initSupabaseClient();
+            if (ok) {
+                showAuthFeedback(dom.cfgSaveMessage, 'Đã lưu cấu hình và kết nối Supabase thành công!', 'success');
+                showToast('Đã lưu cấu hình kết nối Supabase!');
+            } else {
+                showAuthFeedback(dom.cfgSaveMessage, 'Đã lưu cấu hình vào máy (trình duyệt hiện chưa nạp được SDK hoặc đang offline).', 'success');
+            }
+        } catch (err) {
+            showAuthFeedback(dom.cfgSaveMessage, 'Không thể lưu cấu hình: ' + (err.message || 'Lỗi không xác định'));
+        }
+    }
+
+    function handleClearSupabaseConfig() {
+        try {
+            localStorage.removeItem(STORAGE_KEYS.SUPABASE_CONFIG);
+        } catch (_) {}
+        if (dom.cfgSupabaseUrl) dom.cfgSupabaseUrl.value = '';
+        if (dom.cfgSupabaseAnonKey) dom.cfgSupabaseAnonKey.value = '';
+        state.supabase = null;
+        state.user = null;
+        updateSyncUiState('idle');
+        showAuthFeedback(dom.cfgSaveMessage, 'Đã xóa cấu hình Supabase tùy chỉnh trên trình duyệt này.', 'success');
+    }
+
+    /* ==========================================================================
+       PWA Service Worker & Install Prompt (Phase 2)
+       ========================================================================== */
+    function registerServiceWorker() {
+        if (!('serviceWorker' in navigator)) return;
+        const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+        if (location.protocol !== 'https:' && !isLocalhost) return;
+
+        navigator.serviceWorker.register('./sw.js')
+            .then((registration) => {
+                // Check for updates gracefully in background
+                registration.update().catch(() => {});
+            })
+            .catch((err) => {
+                console.warn('Không thể đăng ký Service Worker:', err);
+            });
+    }
+
+    function initPwaInstallPrompt() {
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            state.deferredInstallPrompt = e;
+            if (dom.installPwaBtn) {
+                dom.installPwaBtn.classList.remove('hidden');
+            }
+        });
+
+        window.addEventListener('appinstalled', () => {
+            state.deferredInstallPrompt = null;
+            if (dom.installPwaBtn) {
+                dom.installPwaBtn.classList.add('hidden');
+            }
+            showToast('Đã cài đặt ứng dụng TaskFlow thành công!');
+        });
+
+        if (dom.installPwaBtn) {
+            dom.installPwaBtn.addEventListener('click', async () => {
+                if (!state.deferredInstallPrompt) return;
+                state.deferredInstallPrompt.prompt();
+                try {
+                    await state.deferredInstallPrompt.userChoice;
+                } catch (_) {}
+                state.deferredInstallPrompt = null;
+                dom.installPwaBtn.classList.add('hidden');
+            });
+        }
     }
 
     /* ==========================================================================
@@ -900,8 +1573,44 @@
                 if (!dom.taskModal.classList.contains('hidden')) closeTaskModal();
                 if (!dom.deleteModal.classList.contains('hidden')) closeDeleteModal();
                 if (!dom.restoreModal.classList.contains('hidden')) closeRestoreModal();
+                if (dom.authModal && !dom.authModal.classList.contains('hidden')) closeAuthModal();
             }
         });
+
+        // Auth & Cloud Sync Modal (Phase 3)
+        if (dom.authSyncBtn) {
+            dom.authSyncBtn.addEventListener('click', openAuthModal);
+        }
+        if (dom.closeAuthModalBtn) {
+            dom.closeAuthModalBtn.addEventListener('click', closeAuthModal);
+        }
+        if (dom.authModal) {
+            dom.authModal.addEventListener('click', (e) => {
+                if (e.target === dom.authModal) closeAuthModal();
+            });
+        }
+        if (dom.authModeTabs) {
+            dom.authModeTabs.addEventListener('click', (e) => {
+                const btn = e.target.closest('.tab-btn');
+                if (!btn) return;
+                setAuthMode(btn.dataset.authMode);
+            });
+        }
+        if (dom.authForm) {
+            dom.authForm.addEventListener('submit', handleAuthFormSubmit);
+        }
+        if (dom.manualSyncNowBtn) {
+            dom.manualSyncNowBtn.addEventListener('click', () => syncTasksWithCloud(true));
+        }
+        if (dom.signOutBtn) {
+            dom.signOutBtn.addEventListener('click', handleSignOut);
+        }
+        if (dom.saveSupabaseConfigBtn) {
+            dom.saveSupabaseConfigBtn.addEventListener('click', handleSaveSupabaseConfig);
+        }
+        if (dom.clearSupabaseConfigBtn) {
+            dom.clearSupabaseConfigBtn.addEventListener('click', handleClearSupabaseConfig);
+        }
 
         // Search input
         dom.searchInput.addEventListener('input', (e) => {
@@ -987,9 +1696,12 @@
         loadTasks();
         updateNotifyButtonState();
         bindEvents();
+        initPwaInstallPrompt();
+        registerServiceWorker();
         renderAll();
         checkReminders();
         startReminderLoop();
+        initSupabaseClient();
     }
 
     if (document.readyState === 'loading') {

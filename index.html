@@ -3,7 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#4f46e5" id="metaThemeColor">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="TaskFlow">
     <title>TaskFlow — Quản lý công việc cá nhân</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -29,6 +37,21 @@
                 </div>
 
                 <div class="header-actions">
+                    <button type="button" id="installPwaBtn" class="btn btn-secondary hidden" aria-label="Cài đặt ứng dụng TaskFlow" title="Cài đặt ứng dụng lên thiết bị">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        <span class="install-btn-text">Cài đặt</span>
+                    </button>
+                    <button type="button" id="authSyncBtn" class="btn btn-secondary" aria-label="Đăng nhập và đồng bộ đám mây" title="Đăng nhập / Đồng bộ đa thiết bị">
+                        <span id="syncStatusDot" class="sync-dot sync-dot-local" aria-hidden="true"></span>
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+                        </svg>
+                        <span id="authSyncBtnText" class="auth-btn-text">Đồng bộ</span>
+                    </button>
                     <button type="button" id="notifyToggleBtn" class="btn btn-icon" aria-label="Bật thông báo nhắc nhở" title="Bật thông báo nhắc nhở khi đang mở web">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
@@ -342,9 +365,96 @@
         </div>
     </div>
 
+    <!-- Cloud Sync & Authentication Modal (Phase 3) -->
+    <div id="authModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="authModalTitle" class="modal-title">Đồng bộ đám mây (Supabase)</h2>
+                <button type="button" id="closeAuthModalBtn" class="btn btn-icon modal-close" aria-label="Đóng">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <!-- Logged-in Account View -->
+                <div id="authAccountPanel" class="hidden">
+                    <div class="sync-account-box">
+                        <div class="sync-account-row">
+                            <span class="sync-badge sync-badge-online" id="accountSyncBadge">Đã kết nối Cloud</span>
+                            <span class="sync-last-time" id="lastSyncTimeText">Vừa đồng bộ</span>
+                        </div>
+                        <p class="sync-account-email" id="authUserEmail">user@example.com</p>
+                        <p class="sync-account-hint">Công việc của bạn được lưu trữ an toàn trên cả thiết bị này (LocalStorage) và tài khoản đám mây để đồng bộ giữa máy tính và điện thoại.</p>
+                    </div>
+
+                    <div class="sync-actions-row">
+                        <button type="button" id="manualSyncNowBtn" class="btn btn-primary">
+                            Đồng bộ ngay
+                        </button>
+                        <button type="button" id="signOutBtn" class="btn btn-secondary">
+                            Đăng xuất
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Login / Sign Up Form View -->
+                <div id="authLoginPanel">
+                    <div class="status-tabs auth-mode-tabs" id="authModeTabs" role="tablist">
+                        <button type="button" class="tab-btn active" data-auth-mode="signin" role="tab" aria-selected="true">Đăng nhập</button>
+                        <button type="button" class="tab-btn" data-auth-mode="signup" role="tab" aria-selected="false">Đăng ký tài khoản</button>
+                    </div>
+
+                    <form id="authForm" novalidate style="margin-top: 1rem;">
+                        <div class="form-group">
+                            <label for="authEmail" class="form-label">Email <span class="required">*</span></label>
+                            <input type="email" id="authEmail" class="form-input" placeholder="ban@example.com" autocomplete="email" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="authPassword" class="form-label">Mật khẩu <span class="required">*</span></label>
+                            <input type="password" id="authPassword" class="form-input" placeholder="Tối thiểu 6 ký tự..." autocomplete="current-password" minlength="6" required>
+                        </div>
+
+                        <p id="authMessage" class="form-error hidden" style="margin-bottom: 0.75rem;"></p>
+
+                        <button type="submit" id="authSubmitBtn" class="btn btn-primary" style="width: 100%;">
+                            Đăng nhập & Đồng bộ
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Collapsible Supabase Public Configuration -->
+                <details id="supabaseConfigDetails" class="sync-config-details">
+                    <summary class="sync-config-summary">Cấu hình kết nối Supabase (URL & Public Anon Key)</summary>
+                    <div class="sync-config-body">
+                        <p class="sync-config-note">Chỉ sử dụng <strong>Project URL</strong> và <strong>anon public key</strong> (an toàn với Row Level Security). Không bao giờ nhập <code>service_role</code> secret key vào trình duyệt.</p>
+                        <div class="form-group">
+                            <label for="cfgSupabaseUrl" class="form-label">Supabase Project URL</label>
+                            <input type="url" id="cfgSupabaseUrl" class="form-input" placeholder="https://xxxx.supabase.co">
+                        </div>
+                        <div class="form-group">
+                            <label for="cfgSupabaseAnonKey" class="form-label">Supabase Anon Public Key</label>
+                            <input type="text" id="cfgSupabaseAnonKey" class="form-input" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+                        </div>
+                        <span id="cfgSaveMessage" class="form-error hidden" style="display: block; margin-bottom: 0.5rem;"></span>
+                        <div class="sync-config-actions">
+                            <button type="button" id="saveSupabaseConfigBtn" class="btn btn-secondary">Lưu kết nối</button>
+                            <button type="button" id="clearSupabaseConfigBtn" class="btn-link">Xóa cấu hình</button>
+                        </div>
+                    </div>
+                </details>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notification Container -->
     <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" crossorigin="anonymous"></script>
+    <script src="js/config.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>
