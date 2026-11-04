@@ -17,6 +17,9 @@
         'Low': 1
     };
 
+    const VALID_PRIORITIES = ['Low', 'Medium', 'High'];
+    const VALID_STATUSES = ['Todo', 'In Progress', 'Completed'];
+
     // Application State
     let state = {
         tasks: [],
@@ -87,6 +90,12 @@
         confirmDeleteBtn: document.getElementById('confirmDeleteBtn'),
         deleteTaskName: document.getElementById('deleteTaskName'),
 
+        // Restore Sample Modal
+        restoreModal: document.getElementById('restoreModal'),
+        closeRestoreModalBtn: document.getElementById('closeRestoreModalBtn'),
+        cancelRestoreBtn: document.getElementById('cancelRestoreBtn'),
+        confirmRestoreBtn: document.getElementById('confirmRestoreBtn'),
+
         // Toast
         toastContainer: document.getElementById('toastContainer')
     };
@@ -137,9 +146,54 @@
     }
 
     function escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str || '';
-        return div.innerHTML;
+        return String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function isValidDateString(dateStr) {
+        if (typeof dateStr !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+            return false;
+        }
+        const [year, month, day] = dateStr.split('-').map(Number);
+        if (year < 2000 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31) {
+            return false;
+        }
+        const date = new Date(year, month - 1, day);
+        return (
+            date.getFullYear() === year &&
+            date.getMonth() === month - 1 &&
+            date.getDate() === day
+        );
+    }
+
+    function normalizeTask(raw) {
+        if (!raw || typeof raw !== 'object') return null;
+        const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+        if (!title) return null;
+
+        const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : generateId();
+        const description = typeof raw.description === 'string' ? raw.description.trim() : '';
+        const dueDate = isValidDateString(raw.dueDate) ? raw.dueDate : getTodayDateString();
+        const priority = VALID_PRIORITIES.includes(raw.priority) ? raw.priority : 'Medium';
+        const status = VALID_STATUSES.includes(raw.status) ? raw.status : 'Todo';
+        const createdAt = typeof raw.createdAt === 'number' && Number.isFinite(raw.createdAt)
+            ? raw.createdAt
+            : Date.now();
+
+        return {
+            id,
+            title,
+            description,
+            dueDate,
+            priority,
+            status,
+            createdAt,
+            ...(typeof raw.updatedAt === 'number' && Number.isFinite(raw.updatedAt) ? { updatedAt: raw.updatedAt } : {})
+        };
     }
 
     function showToast(message, type = 'success') {
@@ -227,7 +281,11 @@
                 saveTasks();
             } else {
                 const parsed = JSON.parse(raw);
-                state.tasks = Array.isArray(parsed) ? parsed : [];
+                if (Array.isArray(parsed)) {
+                    state.tasks = parsed.map(normalizeTask).filter(Boolean);
+                } else {
+                    state.tasks = [];
+                }
             }
         } catch (err) {
             console.error('Không thể đọc dữ liệu từ LocalStorage:', err);
@@ -317,7 +375,8 @@
         return (
             state.filters.search.trim() !== '' ||
             state.filters.status !== 'all' ||
-            state.filters.priority !== 'all'
+            state.filters.priority !== 'all' ||
+            state.filters.sortBy !== 'dueDateAsc'
         );
     }
 
@@ -481,11 +540,14 @@
             dom.titleError.classList.remove('hidden');
             isValid = false;
         }
-        if (!dueDate) {
+        if (!isValidDateString(dueDate)) {
             dom.dateError.classList.remove('hidden');
             isValid = false;
         }
         if (!isValid) return;
+
+        const safePriority = VALID_PRIORITIES.includes(priority) ? priority : 'Medium';
+        const safeStatus = VALID_STATUSES.includes(status) ? status : 'Todo';
 
         if (state.editingTaskId) {
             const idx = state.tasks.findIndex(t => t.id === state.editingTaskId);
@@ -495,8 +557,8 @@
                     title,
                     description,
                     dueDate,
-                    priority,
-                    status,
+                    priority: safePriority,
+                    status: safeStatus,
                     updatedAt: Date.now()
                 };
                 showToast('Đã cập nhật công việc thành công!');
@@ -507,8 +569,8 @@
                 title,
                 description,
                 dueDate,
-                priority,
-                status,
+                priority: safePriority,
+                status: safeStatus,
                 createdAt: Date.now()
             };
             state.tasks.unshift(newTask);
@@ -545,7 +607,7 @@
 
     function updateTaskStatusQuick(id, newStatus) {
         const task = state.tasks.find(t => t.id === id);
-        if (!task) return;
+        if (!task || !VALID_STATUSES.includes(newStatus)) return;
         task.status = newStatus;
         task.updatedAt = Date.now();
         saveTasks();
@@ -553,13 +615,32 @@
         showToast(`Đã chuyển trạng thái sang "${newStatus}"`);
     }
 
+    function openRestoreModal() {
+        dom.restoreModal.classList.remove('hidden');
+    }
+
+    function closeRestoreModal() {
+        dom.restoreModal.classList.add('hidden');
+    }
+
+    function confirmRestoreSample() {
+        state.tasks = getSampleTasks();
+        saveTasks();
+        resetAllFilters();
+        renderAll();
+        closeRestoreModal();
+        showToast('Đã khôi phục dữ liệu mẫu!');
+    }
+
     function resetAllFilters() {
         state.filters.search = '';
         state.filters.status = 'all';
         state.filters.priority = 'all';
+        state.filters.sortBy = 'dueDateAsc';
 
         dom.searchInput.value = '';
         dom.priorityFilter.value = 'all';
+        dom.sortBy.value = 'dueDateAsc';
 
         const tabs = dom.statusFilterTabs.querySelectorAll('.tab-btn');
         tabs.forEach(btn => {
@@ -605,6 +686,7 @@
             if (e.key === 'Escape') {
                 if (!dom.taskModal.classList.contains('hidden')) closeTaskModal();
                 if (!dom.deleteModal.classList.contains('hidden')) closeDeleteModal();
+                if (!dom.restoreModal.classList.contains('hidden')) closeRestoreModal();
             }
         });
 
@@ -674,13 +756,13 @@
             updateTaskStatusQuick(select.dataset.id, select.value);
         });
 
-        // Restore Sample Data
-        dom.restoreSampleBtn.addEventListener('click', () => {
-            state.tasks = getSampleTasks();
-            saveTasks();
-            resetAllFilters();
-            renderAll();
-            showToast('Đã khôi phục dữ liệu mẫu!');
+        // Restore Sample Data Modal
+        dom.restoreSampleBtn.addEventListener('click', openRestoreModal);
+        dom.closeRestoreModalBtn.addEventListener('click', closeRestoreModal);
+        dom.cancelRestoreBtn.addEventListener('click', closeRestoreModal);
+        dom.confirmRestoreBtn.addEventListener('click', confirmRestoreSample);
+        dom.restoreModal.addEventListener('click', (e) => {
+            if (e.target === dom.restoreModal) closeRestoreModal();
         });
     }
 
