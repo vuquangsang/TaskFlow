@@ -1,0 +1,703 @@
+/**
+ * TaskFlow — Personal Task Manager Application Logic
+ * Pure Vanilla JavaScript with LocalStorage Persistence
+ */
+
+(function () {
+    'use strict';
+
+    const STORAGE_KEYS = {
+        TASKS: 'taskflow_tasks_v1',
+        THEME: 'taskflow_theme_v1'
+    };
+
+    const PRIORITY_WEIGHT = {
+        'High': 3,
+        'Medium': 2,
+        'Low': 1
+    };
+
+    // Application State
+    let state = {
+        tasks: [],
+        filters: {
+            search: '',
+            status: 'all',
+            priority: 'all',
+            sortBy: 'dueDateAsc'
+        },
+        editingTaskId: null,
+        deletingTaskId: null
+    };
+
+    // DOM Elements
+    const dom = {
+        html: document.documentElement,
+        themeToggleBtn: document.getElementById('themeToggleBtn'),
+        openAddModalBtn: document.getElementById('openAddModalBtn'),
+        emptyAddBtn: document.getElementById('emptyAddBtn'),
+        restoreSampleBtn: document.getElementById('restoreSampleBtn'),
+
+        // Stats
+        statTotal: document.getElementById('statTotal'),
+        statOverdueText: document.getElementById('statOverdueText'),
+        statPending: document.getElementById('statPending'),
+        statPendingBreakdown: document.getElementById('statPendingBreakdown'),
+        statCompleted: document.getElementById('statCompleted'),
+        statCompletedRate: document.getElementById('statCompletedRate'),
+        statProgressPercent: document.getElementById('statProgressPercent'),
+        statProgressBar: document.getElementById('statProgressBar'),
+        progressBarTrack: document.getElementById('progressBarTrack'),
+        statProgressSummary: document.getElementById('statProgressSummary'),
+
+        // Filters & Search
+        searchInput: document.getElementById('searchInput'),
+        clearSearchBtn: document.getElementById('clearSearchBtn'),
+        statusFilterTabs: document.getElementById('statusFilterTabs'),
+        priorityFilter: document.getElementById('priorityFilter'),
+        sortBy: document.getElementById('sortBy'),
+        resultsCountText: document.getElementById('resultsCountText'),
+        resetFiltersBtn: document.getElementById('resetFiltersBtn'),
+
+        // Tasks List
+        tasksContainer: document.getElementById('tasksContainer'),
+        emptyState: document.getElementById('emptyState'),
+        emptyStateTitle: document.getElementById('emptyStateTitle'),
+        emptyStateDesc: document.getElementById('emptyStateDesc'),
+
+        // Add/Edit Modal
+        taskModal: document.getElementById('taskModal'),
+        modalTitle: document.getElementById('modalTitle'),
+        closeModalBtn: document.getElementById('closeModalBtn'),
+        cancelModalBtn: document.getElementById('cancelModalBtn'),
+        taskForm: document.getElementById('taskForm'),
+        taskId: document.getElementById('taskId'),
+        taskTitle: document.getElementById('taskTitle'),
+        taskDescription: document.getElementById('taskDescription'),
+        taskDueDate: document.getElementById('taskDueDate'),
+        taskPriority: document.getElementById('taskPriority'),
+        taskStatus: document.getElementById('taskStatus'),
+        titleError: document.getElementById('titleError'),
+        dateError: document.getElementById('dateError'),
+
+        // Delete Modal
+        deleteModal: document.getElementById('deleteModal'),
+        closeDeleteModalBtn: document.getElementById('closeDeleteModalBtn'),
+        cancelDeleteBtn: document.getElementById('cancelDeleteBtn'),
+        confirmDeleteBtn: document.getElementById('confirmDeleteBtn'),
+        deleteTaskName: document.getElementById('deleteTaskName'),
+
+        // Toast
+        toastContainer: document.getElementById('toastContainer')
+    };
+
+    /* ==========================================================================
+       Helper Utilities
+       ========================================================================== */
+    function generateId() {
+        return 'task_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    }
+
+    function getTodayDateString() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+
+    function getRelativeDateString(offsetDays) {
+        const date = new Date();
+        date.setDate(date.getDate() + offsetDays);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+
+    function formatDisplayDate(dateStr) {
+        if (!dateStr) return 'Không có hạn';
+        const parts = dateStr.split('-');
+        if (parts.length !== 3) return dateStr;
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+
+    function getDueStatus(dueDateStr, status) {
+        if (status === 'Completed' || !dueDateStr) {
+            return { type: 'normal', label: formatDisplayDate(dueDateStr) };
+        }
+        const today = getTodayDateString();
+        if (dueDateStr < today) {
+            return { type: 'overdue', label: `Quá hạn (${formatDisplayDate(dueDateStr)})` };
+        }
+        if (dueDateStr === today) {
+            return { type: 'today', label: `Hôm nay (${formatDisplayDate(dueDateStr)})` };
+        }
+        return { type: 'normal', label: formatDisplayDate(dueDateStr) };
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+
+    function showToast(message, type = 'success') {
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.textContent = message;
+        dom.toastContainer.appendChild(toast);
+
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateX(20px)';
+            toast.style.transition = 'all 0.2s ease';
+            setTimeout(() => toast.remove(), 200);
+        }, 2800);
+    }
+
+    /* ==========================================================================
+       Theme Management (Light / Dark Mode)
+       ========================================================================== */
+    function initTheme() {
+        const savedTheme = localStorage.getItem(STORAGE_KEYS.THEME);
+        if (savedTheme === 'dark' || savedTheme === 'light') {
+            dom.html.setAttribute('data-theme', savedTheme);
+        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            dom.html.setAttribute('data-theme', 'dark');
+        }
+    }
+
+    function toggleTheme() {
+        const current = dom.html.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+        const next = current === 'dark' ? 'light' : 'dark';
+        dom.html.setAttribute('data-theme', next);
+        localStorage.setItem(STORAGE_KEYS.THEME, next);
+    }
+
+    /* ==========================================================================
+       LocalStorage & Sample Data
+       ========================================================================== */
+    function getSampleTasks() {
+        return [
+            {
+                id: generateId(),
+                title: 'Thiết kế giao diện UI/UX cho trang Dashboard',
+                description: 'Chuẩn bị bảng màu Light/Dark mode, hệ thống lưới responsive và các thẻ thống kê.',
+                dueDate: getRelativeDateString(1),
+                priority: 'High',
+                status: 'In Progress',
+                createdAt: Date.now() - 3600000 * 24
+            },
+            {
+                id: generateId(),
+                title: 'Viết tài liệu hướng dẫn bàn giao dự án',
+                description: 'Tổng hợp cấu trúc thư mục, hướng dẫn sử dụng các bộ lọc và lưu trữ LocalStorage.',
+                dueDate: getRelativeDateString(3),
+                priority: 'Medium',
+                status: 'Todo',
+                createdAt: Date.now() - 3600000 * 18
+            },
+            {
+                id: generateId(),
+                title: 'Kiểm thử tính năng Lọc và Thống kê công việc',
+                description: 'Đảm bảo số liệu hoàn thành và chưa hoàn thành cập nhật tức thì khi đổi trạng thái.',
+                dueDate: getTodayDateString(),
+                priority: 'High',
+                status: 'Completed',
+                createdAt: Date.now() - 3600000 * 12
+            },
+            {
+                id: generateId(),
+                title: 'Dọn dẹp email và sắp xếp lịch họp tuần tới',
+                description: 'Phân loại các email quan trọng từ khách hàng và xác nhận lịch review sản phẩm.',
+                dueDate: getRelativeDateString(-1),
+                priority: 'Low',
+                status: 'Todo',
+                createdAt: Date.now() - 3600000 * 30
+            }
+        ];
+    }
+
+    function loadTasks() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEYS.TASKS);
+            if (raw === null) {
+                state.tasks = getSampleTasks();
+                saveTasks();
+            } else {
+                const parsed = JSON.parse(raw);
+                state.tasks = Array.isArray(parsed) ? parsed : [];
+            }
+        } catch (err) {
+            console.error('Không thể đọc dữ liệu từ LocalStorage:', err);
+            state.tasks = [];
+        }
+    }
+
+    function saveTasks() {
+        try {
+            localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(state.tasks));
+        } catch (err) {
+            console.error('Không thể lưu dữ liệu vào LocalStorage:', err);
+        }
+    }
+
+    /* ==========================================================================
+       Statistics Calculation & Rendering
+       ========================================================================== */
+    function renderStats() {
+        const total = state.tasks.length;
+        const completed = state.tasks.filter(t => t.status === 'Completed').length;
+        const todo = state.tasks.filter(t => t.status === 'Todo').length;
+        const inProgress = state.tasks.filter(t => t.status === 'In Progress').length;
+        const pending = todo + inProgress;
+
+        const today = getTodayDateString();
+        const overdue = state.tasks.filter(t => t.status !== 'Completed' && t.dueDate && t.dueDate < today).length;
+
+        const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        dom.statTotal.textContent = total;
+        dom.statOverdueText.textContent = overdue > 0 ? `${overdue} công việc quá hạn` : 'Không có việc quá hạn';
+        dom.statOverdueText.classList.toggle('overdue-alert', overdue > 0);
+
+        dom.statPending.textContent = pending;
+        dom.statPendingBreakdown.textContent = `${todo} Todo · ${inProgress} In Progress`;
+
+        dom.statCompleted.textContent = completed;
+        dom.statCompletedRate.textContent = `Tỷ lệ: ${percent}%`;
+
+        dom.statProgressPercent.textContent = `${percent}%`;
+        dom.statProgressBar.style.width = `${percent}%`;
+        dom.progressBarTrack.setAttribute('aria-valuenow', percent);
+
+        if (total === 0) {
+            dom.statProgressSummary.textContent = 'Chưa có công việc nào';
+        } else if (completed === total) {
+            dom.statProgressSummary.textContent = 'Tuyệt vời! Bạn đã hoàn thành tất cả công việc.';
+        } else {
+            dom.statProgressSummary.textContent = `Đã hoàn thành ${completed}/${total} công việc (${pending} chưa hoàn thành)`;
+        }
+    }
+
+    /* ==========================================================================
+       Filtering, Sorting & Task List Rendering
+       ========================================================================== */
+    function getFilteredAndSortedTasks() {
+        const { search, status, priority, sortBy } = state.filters;
+        const keyword = search.trim().toLowerCase();
+
+        const filtered = state.tasks.filter(task => {
+            const matchesStatus = status === 'all' || task.status === status;
+            const matchesPriority = priority === 'all' || task.priority === priority;
+            const matchesSearch = !keyword ||
+                task.title.toLowerCase().includes(keyword) ||
+                (task.description && task.description.toLowerCase().includes(keyword));
+
+            return matchesStatus && matchesPriority && matchesSearch;
+        });
+
+        return filtered.sort((a, b) => {
+            if (sortBy === 'priorityDesc') {
+                const diff = (PRIORITY_WEIGHT[b.priority] || 0) - (PRIORITY_WEIGHT[a.priority] || 0);
+                if (diff !== 0) return diff;
+            } else if (sortBy === 'createdDesc') {
+                return (b.createdAt || 0) - (a.createdAt || 0);
+            }
+            // Default: dueDateAsc
+            const dateA = a.dueDate || '9999-12-31';
+            const dateB = b.dueDate || '9999-12-31';
+            if (dateA !== dateB) return dateA.localeCompare(dateB);
+            return (PRIORITY_WEIGHT[b.priority] || 0) - (PRIORITY_WEIGHT[a.priority] || 0);
+        });
+    }
+
+    function hasActiveFilters() {
+        return (
+            state.filters.search.trim() !== '' ||
+            state.filters.status !== 'all' ||
+            state.filters.priority !== 'all'
+        );
+    }
+
+    function renderTasks() {
+        const filteredTasks = getFilteredAndSortedTasks();
+        const totalTasks = state.tasks.length;
+        const isFiltered = hasActiveFilters();
+
+        // Update results count & filter reset link
+        dom.resultsCountText.textContent = isFiltered
+            ? `Hiển thị ${filteredTasks.length} / ${totalTasks} công việc`
+            : `Hiển thị ${filteredTasks.length} công việc`;
+        dom.resetFiltersBtn.classList.toggle('hidden', !isFiltered);
+        dom.clearSearchBtn.classList.toggle('hidden', state.filters.search.trim() === '');
+
+        if (filteredTasks.length === 0) {
+            dom.tasksContainer.innerHTML = '';
+            dom.emptyState.classList.remove('hidden');
+
+            if (totalTasks > 0 && isFiltered) {
+                dom.emptyStateTitle.textContent = 'Không tìm thấy công việc phù hợp';
+                dom.emptyStateDesc.textContent = 'Thử thay đổi bộ lọc trạng thái, mức ưu tiên hoặc từ khóa tìm kiếm của bạn.';
+                dom.emptyAddBtn.classList.add('hidden');
+            } else {
+                dom.emptyStateTitle.textContent = 'Chưa có công việc nào';
+                dom.emptyStateDesc.textContent = 'Hãy thêm công việc đầu tiên để bắt đầu quản lý thời gian hiệu quả hơn.';
+                dom.emptyAddBtn.classList.remove('hidden');
+            }
+            return;
+        }
+
+        dom.emptyState.classList.add('hidden');
+
+        dom.tasksContainer.innerHTML = filteredTasks.map(task => {
+            const dueInfo = getDueStatus(task.dueDate, task.status);
+            const statusClass = task.status.replace(/\s+/g, '');
+            const isCompleted = task.status === 'Completed';
+
+            const dueClass = dueInfo.type === 'overdue'
+                ? 'is-overdue'
+                : (dueInfo.type === 'today' ? 'is-today' : '');
+
+            return `
+                <article class="task-card ${isCompleted ? 'is-completed' : ''}" data-id="${escapeHtml(task.id)}" data-priority="${escapeHtml(task.priority)}">
+                    <div>
+                        <div class="task-card-top">
+                            <div class="task-badges">
+                                <span class="badge badge-priority-${escapeHtml(task.priority)}">
+                                    ${escapeHtml(task.priority)}
+                                </span>
+                                <span class="badge badge-status-${escapeHtml(statusClass)}">
+                                    ${escapeHtml(task.status)}
+                                </span>
+                            </div>
+                            <div class="task-actions">
+                                <button type="button" class="action-btn edit-btn" data-action="edit" data-id="${escapeHtml(task.id)}" title="Chỉnh sửa công việc" aria-label="Chỉnh sửa ${escapeHtml(task.title)}">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                    </svg>
+                                </button>
+                                <button type="button" class="action-btn delete-btn" data-action="delete" data-id="${escapeHtml(task.id)}" title="Xóa công việc" aria-label="Xóa ${escapeHtml(task.title)}">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polyline points="3 6 5 6 21 6"></polyline>
+                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="task-body" style="margin-top: 0.75rem;">
+                            <h3 class="task-title">${escapeHtml(task.title)}</h3>
+                            ${task.description ? `<p class="task-desc">${escapeHtml(task.description)}</p>` : ''}
+                        </div>
+                    </div>
+
+                    <div class="task-footer">
+                        <div class="task-due ${dueClass}" title="Ngày hết hạn">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="16" y1="2" x2="16" y2="6"></line>
+                                <line x1="8" y1="2" x2="8" y2="6"></line>
+                                <line x1="3" y1="10" x2="21" y2="10"></line>
+                            </svg>
+                            <span>${escapeHtml(dueInfo.label)}</span>
+                        </div>
+
+                        <select class="quick-status-select" data-action="status-change" data-id="${escapeHtml(task.id)}" aria-label="Đổi trạng thái công việc">
+                            <option value="Todo" ${task.status === 'Todo' ? 'selected' : ''}>Todo</option>
+                            <option value="In Progress" ${task.status === 'In Progress' ? 'selected' : ''}>In Progress</option>
+                            <option value="Completed" ${task.status === 'Completed' ? 'selected' : ''}>Completed</option>
+                        </select>
+                    </div>
+                </article>
+            `;
+        }).join('');
+    }
+
+    function renderAll() {
+        renderStats();
+        renderTasks();
+    }
+
+    /* ==========================================================================
+       Modal Operations (Add / Edit / Delete)
+       ========================================================================== */
+    function clearValidationErrors() {
+        dom.titleError.classList.add('hidden');
+        dom.dateError.classList.add('hidden');
+    }
+
+    function openAddModal() {
+        state.editingTaskId = null;
+        dom.modalTitle.textContent = 'Thêm công việc mới';
+        dom.taskForm.reset();
+        dom.taskId.value = '';
+        dom.taskDueDate.value = getTodayDateString();
+        dom.taskPriority.value = 'Medium';
+        dom.taskStatus.value = 'Todo';
+        clearValidationErrors();
+
+        dom.taskModal.classList.remove('hidden');
+        setTimeout(() => dom.taskTitle.focus(), 50);
+    }
+
+    function openEditModal(id) {
+        const task = state.tasks.find(t => t.id === id);
+        if (!task) return;
+
+        state.editingTaskId = task.id;
+        dom.modalTitle.textContent = 'Chỉnh sửa công việc';
+        dom.taskId.value = task.id;
+        dom.taskTitle.value = task.title;
+        dom.taskDescription.value = task.description || '';
+        dom.taskDueDate.value = task.dueDate || getTodayDateString();
+        dom.taskPriority.value = task.priority || 'Medium';
+        dom.taskStatus.value = task.status || 'Todo';
+        clearValidationErrors();
+
+        dom.taskModal.classList.remove('hidden');
+        setTimeout(() => dom.taskTitle.focus(), 50);
+    }
+
+    function closeTaskModal() {
+        dom.taskModal.classList.add('hidden');
+        state.editingTaskId = null;
+    }
+
+    function handleTaskFormSubmit(e) {
+        e.preventDefault();
+        clearValidationErrors();
+
+        const title = dom.taskTitle.value.trim();
+        const description = dom.taskDescription.value.trim();
+        const dueDate = dom.taskDueDate.value;
+        const priority = dom.taskPriority.value;
+        const status = dom.taskStatus.value;
+
+        let isValid = true;
+        if (!title) {
+            dom.titleError.classList.remove('hidden');
+            isValid = false;
+        }
+        if (!dueDate) {
+            dom.dateError.classList.remove('hidden');
+            isValid = false;
+        }
+        if (!isValid) return;
+
+        if (state.editingTaskId) {
+            const idx = state.tasks.findIndex(t => t.id === state.editingTaskId);
+            if (idx !== -1) {
+                state.tasks[idx] = {
+                    ...state.tasks[idx],
+                    title,
+                    description,
+                    dueDate,
+                    priority,
+                    status,
+                    updatedAt: Date.now()
+                };
+                showToast('Đã cập nhật công việc thành công!');
+            }
+        } else {
+            const newTask = {
+                id: generateId(),
+                title,
+                description,
+                dueDate,
+                priority,
+                status,
+                createdAt: Date.now()
+            };
+            state.tasks.unshift(newTask);
+            showToast('Đã thêm công việc mới!');
+        }
+
+        saveTasks();
+        renderAll();
+        closeTaskModal();
+    }
+
+    function openDeleteModal(id) {
+        const task = state.tasks.find(t => t.id === id);
+        if (!task) return;
+
+        state.deletingTaskId = task.id;
+        dom.deleteTaskName.textContent = `"${task.title}"`;
+        dom.deleteModal.classList.remove('hidden');
+    }
+
+    function closeDeleteModal() {
+        dom.deleteModal.classList.add('hidden');
+        state.deletingTaskId = null;
+    }
+
+    function confirmDeleteTask() {
+        if (!state.deletingTaskId) return;
+        state.tasks = state.tasks.filter(t => t.id !== state.deletingTaskId);
+        saveTasks();
+        renderAll();
+        closeDeleteModal();
+        showToast('Đã xóa công việc.', 'danger');
+    }
+
+    function updateTaskStatusQuick(id, newStatus) {
+        const task = state.tasks.find(t => t.id === id);
+        if (!task) return;
+        task.status = newStatus;
+        task.updatedAt = Date.now();
+        saveTasks();
+        renderAll();
+        showToast(`Đã chuyển trạng thái sang "${newStatus}"`);
+    }
+
+    function resetAllFilters() {
+        state.filters.search = '';
+        state.filters.status = 'all';
+        state.filters.priority = 'all';
+
+        dom.searchInput.value = '';
+        dom.priorityFilter.value = 'all';
+
+        const tabs = dom.statusFilterTabs.querySelectorAll('.tab-btn');
+        tabs.forEach(btn => {
+            const isAll = btn.dataset.status === 'all';
+            btn.classList.toggle('active', isAll);
+            btn.setAttribute('aria-selected', isAll ? 'true' : 'false');
+        });
+
+        renderTasks();
+    }
+
+    /* ==========================================================================
+       Event Listeners Binding
+       ========================================================================== */
+    function bindEvents() {
+        // Theme toggle
+        dom.themeToggleBtn.addEventListener('click', toggleTheme);
+
+        // Open Add Modal
+        dom.openAddModalBtn.addEventListener('click', openAddModal);
+        dom.emptyAddBtn.addEventListener('click', openAddModal);
+
+        // Close Add/Edit Modal
+        dom.closeModalBtn.addEventListener('click', closeTaskModal);
+        dom.cancelModalBtn.addEventListener('click', closeTaskModal);
+        dom.taskModal.addEventListener('click', (e) => {
+            if (e.target === dom.taskModal) closeTaskModal();
+        });
+
+        // Submit Form
+        dom.taskForm.addEventListener('submit', handleTaskFormSubmit);
+
+        // Delete Modal
+        dom.closeDeleteModalBtn.addEventListener('click', closeDeleteModal);
+        dom.cancelDeleteBtn.addEventListener('click', closeDeleteModal);
+        dom.confirmDeleteBtn.addEventListener('click', confirmDeleteTask);
+        dom.deleteModal.addEventListener('click', (e) => {
+            if (e.target === dom.deleteModal) closeDeleteModal();
+        });
+
+        // Escape key closes active modal
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (!dom.taskModal.classList.contains('hidden')) closeTaskModal();
+                if (!dom.deleteModal.classList.contains('hidden')) closeDeleteModal();
+            }
+        });
+
+        // Search input
+        dom.searchInput.addEventListener('input', (e) => {
+            state.filters.search = e.target.value;
+            renderTasks();
+        });
+
+        dom.clearSearchBtn.addEventListener('click', () => {
+            state.filters.search = '';
+            dom.searchInput.value = '';
+            renderTasks();
+            dom.searchInput.focus();
+        });
+
+        // Status Tabs Filter
+        dom.statusFilterTabs.addEventListener('click', (e) => {
+            const btn = e.target.closest('.tab-btn');
+            if (!btn) return;
+
+            const status = btn.dataset.status;
+            state.filters.status = status;
+
+            dom.statusFilterTabs.querySelectorAll('.tab-btn').forEach(tab => {
+                const active = tab === btn;
+                tab.classList.toggle('active', active);
+                tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+
+            renderTasks();
+        });
+
+        // Priority Filter
+        dom.priorityFilter.addEventListener('change', (e) => {
+            state.filters.priority = e.target.value;
+            renderTasks();
+        });
+
+        // Sort By
+        dom.sortBy.addEventListener('change', (e) => {
+            state.filters.sortBy = e.target.value;
+            renderTasks();
+        });
+
+        // Reset Filters
+        dom.resetFiltersBtn.addEventListener('click', resetAllFilters);
+
+        // Task Card Actions Delegation (Edit, Delete, Quick Status Change)
+        dom.tasksContainer.addEventListener('click', (e) => {
+            const actionBtn = e.target.closest('[data-action]');
+            if (!actionBtn) return;
+
+            const action = actionBtn.dataset.action;
+            const id = actionBtn.dataset.id;
+
+            if (action === 'edit') {
+                openEditModal(id);
+            } else if (action === 'delete') {
+                openDeleteModal(id);
+            }
+        });
+
+        dom.tasksContainer.addEventListener('change', (e) => {
+            const select = e.target.closest('[data-action="status-change"]');
+            if (!select) return;
+            updateTaskStatusQuick(select.dataset.id, select.value);
+        });
+
+        // Restore Sample Data
+        dom.restoreSampleBtn.addEventListener('click', () => {
+            state.tasks = getSampleTasks();
+            saveTasks();
+            resetAllFilters();
+            renderAll();
+            showToast('Đã khôi phục dữ liệu mẫu!');
+        });
+    }
+
+    /* ==========================================================================
+       Bootstrap Application
+       ========================================================================== */
+    function init() {
+        initTheme();
+        loadTasks();
+        bindEvents();
+        renderAll();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+

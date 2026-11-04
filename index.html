@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TaskFlow — Quản lý công việc cá nhân</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="app-wrapper">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="container header-content">
+                <div class="brand">
+                    <div class="brand-logo" aria-hidden="true">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                            <path d="M2 17l10 5 10-5"/>
+                            <path d="M2 12l10 5 10-5"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="brand-title">TaskFlow</h1>
+                        <p class="brand-subtitle">Quản lý công việc cá nhân tối giản</p>
+                    </div>
+                </div>
+
+                <div class="header-actions">
+                    <button type="button" id="themeToggleBtn" class="btn btn-icon" aria-label="Chuyển đổi giao diện Sáng/Tối" title="Chuyển đổi Dark Mode">
+                        <svg class="icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
+                        <svg class="icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                        </svg>
+                    </button>
+                    <button type="button" id="openAddModalBtn" class="btn btn-primary">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        <span>Thêm công việc</span>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="container main-content">
+            <!-- Statistics Dashboard -->
+            <section class="stats-section" aria-label="Thống kê công việc">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon stat-icon-total">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="16" y1="2" x2="16" y2="6"></line>
+                                <line x1="8" y1="2" x2="8" y2="6"></line>
+                                <line x1="3" y1="10" x2="21" y2="10"></line>
+                            </svg>
+                        </div>
+                        <div class="stat-info">
+                            <span class="stat-label">Tổng công việc</span>
+                            <strong class="stat-value" id="statTotal">0</strong>
+                            <span class="stat-meta" id="statOverdueText">0 quá hạn</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon stat-icon-pending">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                        </div>
+                        <div class="stat-info">
+                            <span class="stat-label">Chưa hoàn thành</span>
+                            <strong class="stat-value" id="statPending">0</strong>
+                            <span class="stat-meta" id="statPendingBreakdown">0 Todo · 0 Đang làm</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon stat-icon-completed">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                            </svg>
+                        </div>
+                        <div class="stat-info">
+                            <span class="stat-label">Đã hoàn thành</span>
+                            <strong class="stat-value" id="statCompleted">0</strong>
+                            <span class="stat-meta" id="statCompletedRate">Tỷ lệ: 0%</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card stat-card-progress">
+                        <div class="progress-header">
+                            <span class="stat-label">Tiến độ hoàn thành</span>
+                            <strong class="progress-percent" id="statProgressPercent">0%</strong>
+                        </div>
+                        <div class="progress-bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressBarTrack">
+                            <div class="progress-bar-fill" id="statProgressBar" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-footer">
+                            <span id="statProgressSummary">Chưa có công việc nào</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Filter & Search Controls -->
+            <section class="controls-section" aria-label="Bộ lọc và tìm kiếm">
+                <div class="controls-bar">
+                    <!-- Search input -->
+                    <div class="search-box">
+                        <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <input type="text" id="searchInput" placeholder="Tìm theo tên hoặc mô tả công việc..." autocomplete="off">
+                        <button type="button" id="clearSearchBtn" class="clear-search-btn hidden" aria-label="Xóa tìm kiếm">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- Filter groups -->
+                    <div class="filters-wrapper">
+                        <div class="filter-group">
+                            <label for="statusFilter" class="filter-label">Trạng thái</label>
+                            <div class="status-tabs" id="statusFilterTabs" role="tablist">
+                                <button type="button" class="tab-btn active" data-status="all" role="tab" aria-selected="true">Tất cả</button>
+                                <button type="button" class="tab-btn" data-status="Todo" role="tab" aria-selected="false">Todo</button>
+                                <button type="button" class="tab-btn" data-status="In Progress" role="tab" aria-selected="false">In Progress</button>
+                                <button type="button" class="tab-btn" data-status="Completed" role="tab" aria-selected="false">Completed</button>
+                            </div>
+                        </div>
+
+                        <div class="filter-group">
+                            <label for="priorityFilter" class="filter-label">Mức ưu tiên</label>
+                            <select id="priorityFilter" class="select-control">
+                                <option value="all">Tất cả mức độ</option>
+                                <option value="High">Cao (High)</option>
+                                <option value="Medium">Trung bình (Medium)</option>
+                                <option value="Low">Thấp (Low)</option>
+                            </select>
+                        </div>
+
+                        <div class="filter-group">
+                            <label for="sortBy" class="filter-label">Sắp xếp</label>
+                            <select id="sortBy" class="select-control">
+                                <option value="dueDateAsc">Hạn chót (Gần nhất)</option>
+                                <option value="priorityDesc">Ưu tiên (Cao → Thấp)</option>
+                                <option value="createdDesc">Mới tạo nhất</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active filter summary bar -->
+                <div class="results-bar">
+                    <span id="resultsCountText" class="results-count">Hiển thị 0 công việc</span>
+                    <button type="button" id="resetFiltersBtn" class="btn-link hidden">Xóa bộ lọc</button>
+                </div>
+            </section>
+
+            <!-- Tasks List Section -->
+            <section class="tasks-section" aria-label="Danh sách công việc">
+                <div id="tasksContainer" class="tasks-grid">
+                    <!-- Task cards will be rendered here by JavaScript -->
+                </div>
+
+                <!-- Empty State -->
+                <div id="emptyState" class="empty-state hidden">
+                    <div class="empty-illustration">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 11l3 3L22 4"></path>
+                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                        </svg>
+                    </div>
+                    <h3 id="emptyStateTitle" class="empty-title">Chưa có công việc nào</h3>
+                    <p id="emptyStateDesc" class="empty-desc">Hãy thêm công việc đầu tiên để bắt đầu quản lý thời gian hiệu quả hơn.</p>
+                    <button type="button" id="emptyAddBtn" class="btn btn-primary">
+                        + Tạo công việc mới
+                    </button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <div class="container footer-content">
+                <p>TaskFlow &copy; 2026 — Lưu trữ tự động trên trình duyệt (LocalStorage)</p>
+                <button type="button" id="restoreSampleBtn" class="btn-link">Khôi phục dữ liệu mẫu</button>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Modal Add / Edit Task -->
+    <div id="taskModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="modalTitle" class="modal-title">Thêm công việc mới</h2>
+                <button type="button" id="closeModalBtn" class="btn btn-icon modal-close" aria-label="Đóng hộp thoại">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <form id="taskForm" novalidate>
+                <input type="hidden" id="taskId">
+
+                <div class="form-group">
+                    <label for="taskTitle" class="form-label">Tên công việc <span class="required">*</span></label>
+                    <input type="text" id="taskTitle" class="form-input" placeholder="Ví dụ: Hoàn thiện báo cáo quý..." required maxlength="120">
+                    <span id="titleError" class="form-error hidden">Vui lòng nhập tên công việc.</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="taskDescription" class="form-label">Mô tả chi tiết</label>
+                    <textarea id="taskDescription" class="form-textarea" rows="3" placeholder="Ghi chú các bước thực hiện hoặc tài liệu đính kèm..." maxlength="500"></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="taskDueDate" class="form-label">Ngày hết hạn <span class="required">*</span></label>
+                        <input type="date" id="taskDueDate" class="form-input" required>
+                        <span id="dateError" class="form-error hidden">Vui lòng chọn ngày hết hạn.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskPriority" class="form-label">Mức ưu tiên</label>
+                        <select id="taskPriority" class="form-input">
+                            <option value="Low">Low (Thấp)</option>
+                            <option value="Medium" selected>Medium (Trung bình)</option>
+                            <option value="High">High (Cao)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="taskStatus" class="form-label">Trạng thái</label>
+                    <select id="taskStatus" class="form-input">
+                        <option value="Todo" selected>Todo (Cần làm)</option>
+                        <option value="In Progress">In Progress (Đang thực hiện)</option>
+                        <option value="Completed">Completed (Đã hoàn thành)</option>
+                    </select>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" id="cancelModalBtn" class="btn btn-secondary">Hủy</button>
+                    <button type="submit" id="saveTaskBtn" class="btn btn-primary">Lưu công việc</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="deleteModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+        <div class="modal-card modal-card-sm">
+            <div class="modal-header">
+                <h2 id="deleteModalTitle" class="modal-title">Xác nhận xóa</h2>
+                <button type="button" id="closeDeleteModalBtn" class="btn btn-icon modal-close" aria-label="Đóng">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p>Bạn có chắc chắn muốn xóa công việc <strong id="deleteTaskName"></strong>? Hành động này không thể hoàn tác.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id="cancelDeleteBtn" class="btn btn-secondary">Hủy</button>
+                <button type="button" id="confirmDeleteBtn" class="btn btn-danger">Xóa công việc</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
+
