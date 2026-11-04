@@ -19,6 +19,15 @@
 
     const VALID_PRIORITIES = ['Low', 'Medium', 'High'];
     const VALID_STATUSES = ['Todo', 'In Progress', 'Completed'];
+    const VALID_REMIND_OFFSETS = [-1, 0, 5, 15, 30, 60, 1440];
+    const REMINDER_LABELS = {
+        '0': 'Đúng hạn',
+        '5': 'Trước 5p',
+        '15': 'Trước 15p',
+        '30': 'Trước 30p',
+        '60': 'Trước 1h',
+        '1440': 'Trước 1 ngày'
+    };
 
     // Application State
     let state = {
@@ -30,12 +39,14 @@
             sortBy: 'dueDateAsc'
         },
         editingTaskId: null,
-        deletingTaskId: null
+        deletingTaskId: null,
+        reminderTimerId: null
     };
 
     // DOM Elements
     const dom = {
         html: document.documentElement,
+        notifyToggleBtn: document.getElementById('notifyToggleBtn'),
         themeToggleBtn: document.getElementById('themeToggleBtn'),
         openAddModalBtn: document.getElementById('openAddModalBtn'),
         emptyAddBtn: document.getElementById('emptyAddBtn'),
@@ -78,10 +89,13 @@
         taskTitle: document.getElementById('taskTitle'),
         taskDescription: document.getElementById('taskDescription'),
         taskDueDate: document.getElementById('taskDueDate'),
+        taskDueTime: document.getElementById('taskDueTime'),
+        taskReminder: document.getElementById('taskReminder'),
         taskPriority: document.getElementById('taskPriority'),
         taskStatus: document.getElementById('taskStatus'),
         titleError: document.getElementById('titleError'),
         dateError: document.getElementById('dateError'),
+        timeError: document.getElementById('timeError'),
 
         // Delete Modal
         deleteModal: document.getElementById('deleteModal'),
@@ -124,25 +138,43 @@
         return `${year}-${month}-${day}`;
     }
 
-    function formatDisplayDate(dateStr) {
+    function formatDisplayDate(dateStr, timeStr) {
         if (!dateStr) return 'Không có hạn';
         const parts = dateStr.split('-');
-        if (parts.length !== 3) return dateStr;
-        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+        const formattedDate = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : dateStr;
+        const safeTime = isValidTimeString(timeStr) ? timeStr : '23:59';
+        return `${formattedDate} · ${safeTime}`;
     }
 
-    function getDueStatus(dueDateStr, status) {
+    function getTaskDueTimestamp(dueDateStr, dueTimeStr) {
+        if (!isValidDateString(dueDateStr)) return null;
+        const safeTime = isValidTimeString(dueTimeStr) ? dueTimeStr : '23:59';
+        const [year, month, day] = dueDateStr.split('-').map(Number);
+        const [hour, minute] = safeTime.split(':').map(Number);
+        return new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+    }
+
+    function isTaskOverdue(task, nowMs = Date.now()) {
+        if (!task || task.status === 'Completed' || !task.dueDate) return false;
+        const dueMs = getTaskDueTimestamp(task.dueDate, task.dueTime);
+        if (dueMs === null) return false;
+        return nowMs > dueMs;
+    }
+
+    function getDueStatus(dueDateStr, dueTimeStr, status) {
+        const displayLabel = formatDisplayDate(dueDateStr, dueTimeStr);
         if (status === 'Completed' || !dueDateStr) {
-            return { type: 'normal', label: formatDisplayDate(dueDateStr) };
+            return { type: 'normal', label: displayLabel };
+        }
+        const dueMs = getTaskDueTimestamp(dueDateStr, dueTimeStr);
+        if (dueMs !== null && Date.now() > dueMs) {
+            return { type: 'overdue', label: `Quá hạn (${displayLabel})` };
         }
         const today = getTodayDateString();
-        if (dueDateStr < today) {
-            return { type: 'overdue', label: `Quá hạn (${formatDisplayDate(dueDateStr)})` };
-        }
         if (dueDateStr === today) {
-            return { type: 'today', label: `Hôm nay (${formatDisplayDate(dueDateStr)})` };
+            return { type: 'today', label: `Hôm nay (${displayLabel})` };
         }
-        return { type: 'normal', label: formatDisplayDate(dueDateStr) };
+        return { type: 'normal', label: displayLabel };
     }
 
     function escapeHtml(str) {
@@ -170,6 +202,18 @@
         );
     }
 
+    function isValidTimeString(timeStr) {
+        if (typeof timeStr !== 'string' || !/^\d{2}:\d{2}$/.test(timeStr)) {
+            return false;
+        }
+        const [hour, minute] = timeStr.split(':').map(Number);
+        return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+    }
+
+    function buildReminderKey(dueDate, dueTime, remindOffset) {
+        return `${dueDate}_${dueTime}_${remindOffset}`;
+    }
+
     function normalizeTask(raw) {
         if (!raw || typeof raw !== 'object') return null;
         const title = typeof raw.title === 'string' ? raw.title.trim() : '';
@@ -178,17 +222,24 @@
         const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : generateId();
         const description = typeof raw.description === 'string' ? raw.description.trim() : '';
         const dueDate = isValidDateString(raw.dueDate) ? raw.dueDate : getTodayDateString();
+        const dueTime = isValidTimeString(raw.dueTime) ? raw.dueTime : '23:59';
+        const parsedOffset = Number(raw.remindOffset);
+        const remindOffset = VALID_REMIND_OFFSETS.includes(parsedOffset) ? parsedOffset : -1;
         const priority = VALID_PRIORITIES.includes(raw.priority) ? raw.priority : 'Medium';
         const status = VALID_STATUSES.includes(raw.status) ? raw.status : 'Todo';
         const createdAt = typeof raw.createdAt === 'number' && Number.isFinite(raw.createdAt)
             ? raw.createdAt
             : Date.now();
+        const notifiedForKey = typeof raw.notifiedForKey === 'string' ? raw.notifiedForKey : null;
 
         return {
             id,
             title,
             description,
             dueDate,
+            dueTime,
+            remindOffset,
+            notifiedForKey,
             priority,
             status,
             createdAt,
@@ -239,6 +290,9 @@
                 title: 'Thiết kế giao diện UI/UX cho trang Dashboard',
                 description: 'Chuẩn bị bảng màu Light/Dark mode, hệ thống lưới responsive và các thẻ thống kê.',
                 dueDate: getRelativeDateString(1),
+                dueTime: '23:59',
+                remindOffset: -1,
+                notifiedForKey: null,
                 priority: 'High',
                 status: 'In Progress',
                 createdAt: Date.now() - 3600000 * 24
@@ -248,6 +302,9 @@
                 title: 'Viết tài liệu hướng dẫn bàn giao dự án',
                 description: 'Tổng hợp cấu trúc thư mục, hướng dẫn sử dụng các bộ lọc và lưu trữ LocalStorage.',
                 dueDate: getRelativeDateString(3),
+                dueTime: '23:59',
+                remindOffset: -1,
+                notifiedForKey: null,
                 priority: 'Medium',
                 status: 'Todo',
                 createdAt: Date.now() - 3600000 * 18
@@ -257,6 +314,9 @@
                 title: 'Kiểm thử tính năng Lọc và Thống kê công việc',
                 description: 'Đảm bảo số liệu hoàn thành và chưa hoàn thành cập nhật tức thì khi đổi trạng thái.',
                 dueDate: getTodayDateString(),
+                dueTime: '23:59',
+                remindOffset: -1,
+                notifiedForKey: null,
                 priority: 'High',
                 status: 'Completed',
                 createdAt: Date.now() - 3600000 * 12
@@ -266,6 +326,9 @@
                 title: 'Dọn dẹp email và sắp xếp lịch họp tuần tới',
                 description: 'Phân loại các email quan trọng từ khách hàng và xác nhận lịch review sản phẩm.',
                 dueDate: getRelativeDateString(-1),
+                dueTime: '23:59',
+                remindOffset: -1,
+                notifiedForKey: null,
                 priority: 'Low',
                 status: 'Todo',
                 createdAt: Date.now() - 3600000 * 30
@@ -311,8 +374,8 @@
         const inProgress = state.tasks.filter(t => t.status === 'In Progress').length;
         const pending = todo + inProgress;
 
-        const today = getTodayDateString();
-        const overdue = state.tasks.filter(t => t.status !== 'Completed' && t.dueDate && t.dueDate < today).length;
+        const nowMs = Date.now();
+        const overdue = state.tasks.filter(t => isTaskOverdue(t, nowMs)).length;
 
         const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
 
@@ -363,9 +426,9 @@
             } else if (sortBy === 'createdDesc') {
                 return (b.createdAt || 0) - (a.createdAt || 0);
             }
-            // Default: dueDateAsc
-            const dateA = a.dueDate || '9999-12-31';
-            const dateB = b.dueDate || '9999-12-31';
+            // Default: dueDateAsc (compare both dueDate and dueTime)
+            const dateA = `${a.dueDate || '9999-12-31'}T${isValidTimeString(a.dueTime) ? a.dueTime : '23:59'}`;
+            const dateB = `${b.dueDate || '9999-12-31'}T${isValidTimeString(b.dueTime) ? b.dueTime : '23:59'}`;
             if (dateA !== dateB) return dateA.localeCompare(dateB);
             return (PRIORITY_WEIGHT[b.priority] || 0) - (PRIORITY_WEIGHT[a.priority] || 0);
         });
@@ -411,9 +474,11 @@
         dom.emptyState.classList.add('hidden');
 
         dom.tasksContainer.innerHTML = filteredTasks.map(task => {
-            const dueInfo = getDueStatus(task.dueDate, task.status);
+            const dueInfo = getDueStatus(task.dueDate, task.dueTime, task.status);
             const statusClass = task.status.replace(/\s+/g, '');
             const isCompleted = task.status === 'Completed';
+            const hasReminder = typeof task.remindOffset === 'number' && task.remindOffset >= 0;
+            const reminderLabel = hasReminder ? (REMINDER_LABELS[String(task.remindOffset)] || '') : '';
 
             const dueClass = dueInfo.type === 'overdue'
                 ? 'is-overdue'
@@ -430,6 +495,14 @@
                                 <span class="badge badge-status-${escapeHtml(statusClass)}">
                                     ${escapeHtml(task.status)}
                                 </span>
+                                ${hasReminder ? `
+                                <span class="badge badge-reminder" title="Nhắc nhở: ${escapeHtml(reminderLabel)}">
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                                        <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                                    </svg>
+                                    <span>${escapeHtml(reminderLabel)}</span>
+                                </span>` : ''}
                             </div>
                             <div class="task-actions">
                                 <button type="button" class="action-btn edit-btn" data-action="edit" data-id="${escapeHtml(task.id)}" title="Chỉnh sửa công việc" aria-label="Chỉnh sửa ${escapeHtml(task.title)}">
@@ -486,6 +559,7 @@
     function clearValidationErrors() {
         dom.titleError.classList.add('hidden');
         dom.dateError.classList.add('hidden');
+        if (dom.timeError) dom.timeError.classList.add('hidden');
     }
 
     function openAddModal() {
@@ -494,6 +568,8 @@
         dom.taskForm.reset();
         dom.taskId.value = '';
         dom.taskDueDate.value = getTodayDateString();
+        dom.taskDueTime.value = '23:59';
+        dom.taskReminder.value = '-1';
         dom.taskPriority.value = 'Medium';
         dom.taskStatus.value = 'Todo';
         clearValidationErrors();
@@ -512,6 +588,9 @@
         dom.taskTitle.value = task.title;
         dom.taskDescription.value = task.description || '';
         dom.taskDueDate.value = task.dueDate || getTodayDateString();
+        dom.taskDueTime.value = isValidTimeString(task.dueTime) ? task.dueTime : '23:59';
+        const offsetVal = VALID_REMIND_OFFSETS.includes(Number(task.remindOffset)) ? String(task.remindOffset) : '-1';
+        dom.taskReminder.value = offsetVal;
         dom.taskPriority.value = task.priority || 'Medium';
         dom.taskStatus.value = task.status || 'Todo';
         clearValidationErrors();
@@ -532,6 +611,9 @@
         const title = dom.taskTitle.value.trim();
         const description = dom.taskDescription.value.trim();
         const dueDate = dom.taskDueDate.value;
+        const dueTime = dom.taskDueTime.value;
+        const parsedRemindOffset = Number(dom.taskReminder.value);
+        const remindOffset = VALID_REMIND_OFFSETS.includes(parsedRemindOffset) ? parsedRemindOffset : -1;
         const priority = dom.taskPriority.value;
         const status = dom.taskStatus.value;
 
@@ -544,6 +626,10 @@
             dom.dateError.classList.remove('hidden');
             isValid = false;
         }
+        if (!isValidTimeString(dueTime)) {
+            if (dom.timeError) dom.timeError.classList.remove('hidden');
+            isValid = false;
+        }
         if (!isValid) return;
 
         const safePriority = VALID_PRIORITIES.includes(priority) ? priority : 'Medium';
@@ -552,11 +638,20 @@
         if (state.editingTaskId) {
             const idx = state.tasks.findIndex(t => t.id === state.editingTaskId);
             if (idx !== -1) {
+                const prev = state.tasks[idx];
+                const scheduleChanged = (
+                    prev.dueDate !== dueDate ||
+                    prev.dueTime !== dueTime ||
+                    prev.remindOffset !== remindOffset
+                );
                 state.tasks[idx] = {
-                    ...state.tasks[idx],
+                    ...prev,
                     title,
                     description,
                     dueDate,
+                    dueTime,
+                    remindOffset,
+                    notifiedForKey: scheduleChanged ? null : (prev.notifiedForKey || null),
                     priority: safePriority,
                     status: safeStatus,
                     updatedAt: Date.now()
@@ -569,6 +664,9 @@
                 title,
                 description,
                 dueDate,
+                dueTime,
+                remindOffset,
+                notifiedForKey: null,
                 priority: safePriority,
                 status: safeStatus,
                 createdAt: Date.now()
@@ -579,6 +677,7 @@
 
         saveTasks();
         renderAll();
+        checkReminders();
         closeTaskModal();
     }
 
@@ -653,9 +752,123 @@
     }
 
     /* ==========================================================================
+       In-App & Browser Notifications (While Website Is Open)
+       ========================================================================== */
+    function updateNotifyButtonState() {
+        if (!dom.notifyToggleBtn) return;
+        if (!('Notification' in window)) {
+            dom.notifyToggleBtn.classList.remove('is-active', 'is-denied');
+            dom.notifyToggleBtn.title = 'Trình duyệt không hỗ trợ Notification API';
+            return;
+        }
+        const perm = Notification.permission;
+        dom.notifyToggleBtn.classList.toggle('is-active', perm === 'granted');
+        dom.notifyToggleBtn.classList.toggle('is-denied', perm === 'denied');
+        if (perm === 'granted') {
+            dom.notifyToggleBtn.title = 'Thông báo nhắc nhở đang BẬT (khi mở trang)';
+            dom.notifyToggleBtn.setAttribute('aria-label', 'Thông báo nhắc nhở đang bật');
+        } else if (perm === 'denied') {
+            dom.notifyToggleBtn.title = 'Quyền thông báo đã bị từ chối trong trình duyệt';
+            dom.notifyToggleBtn.setAttribute('aria-label', 'Quyền thông báo đã bị từ chối');
+        } else {
+            dom.notifyToggleBtn.title = 'Bấm để bật thông báo nhắc nhở khi đang mở web';
+            dom.notifyToggleBtn.setAttribute('aria-label', 'Bật thông báo nhắc nhở');
+        }
+    }
+
+    function requestNotificationPermission() {
+        if (!('Notification' in window)) {
+            showToast('Trình duyệt của bạn không hỗ trợ thông báo hệ thống. Ứng dụng vẫn hiển thị nhắc nhở trực tiếp trên trang.');
+            return;
+        }
+        if (Notification.permission === 'granted') {
+            showToast('Thông báo nhắc nhở đã được bật sẵn!');
+            updateNotifyButtonState();
+            return;
+        }
+        if (Notification.permission === 'denied') {
+            showToast('Bạn đã chặn quyền thông báo. Ứng dụng vẫn hoạt động và nhắc nhở trực tiếp trên trang.', 'danger');
+            updateNotifyButtonState();
+            return;
+        }
+
+        Notification.requestPermission().then(permission => {
+            updateNotifyButtonState();
+            if (permission === 'granted') {
+                showToast('Đã bật thông báo nhắc nhở thành công!');
+                checkReminders();
+            } else {
+                showToast('Chưa cấp quyền thông báo trình duyệt. Ứng dụng vẫn nhắc nhở trên giao diện web.');
+            }
+        }).catch(() => {
+            updateNotifyButtonState();
+        });
+    }
+
+    function triggerTaskReminder(task) {
+        const displayDue = formatDisplayDate(task.dueDate, task.dueTime);
+        const offsetDesc = REMINDER_LABELS[String(task.remindOffset)] || 'Đến hạn';
+        const message = `Nhắc nhở (${offsetDesc}): "${task.title}" — Hạn: ${displayDue}`;
+
+        showToast(message);
+
+        if ('Notification' in window && Notification.permission === 'granted') {
+            try {
+                new Notification(`TaskFlow — ${task.title}`, {
+                    body: `Hạn chót: ${displayDue} (${offsetDesc})`,
+                    tag: `taskflow_remind_${task.id}_${buildReminderKey(task.dueDate, task.dueTime, task.remindOffset)}`
+                });
+            } catch (err) {
+                console.warn('Không thể khởi tạo Notification:', err);
+            }
+        }
+    }
+
+    function checkReminders() {
+        const nowMs = Date.now();
+        let hasNotifiedChanges = false;
+
+        state.tasks.forEach(task => {
+            if (!task || task.status === 'Completed') return;
+            if (typeof task.remindOffset !== 'number' || task.remindOffset < 0) return;
+
+            const dueMs = getTaskDueTimestamp(task.dueDate, task.dueTime);
+            if (dueMs === null) return;
+
+            const remindAtMs = dueMs - task.remindOffset * 60000;
+            const currentKey = buildReminderKey(task.dueDate, task.dueTime, task.remindOffset);
+
+            if (nowMs >= remindAtMs && task.notifiedForKey !== currentKey) {
+                task.notifiedForKey = currentKey;
+                hasNotifiedChanges = true;
+                triggerTaskReminder(task);
+            }
+        });
+
+        if (hasNotifiedChanges) {
+            saveTasks();
+        }
+
+        // Refresh stats and due badges so tasks crossing their deadline immediately show Overdue
+        renderAll();
+    }
+
+    function startReminderLoop() {
+        if (state.reminderTimerId) {
+            clearInterval(state.reminderTimerId);
+        }
+        state.reminderTimerId = setInterval(checkReminders, 15000);
+    }
+
+    /* ==========================================================================
        Event Listeners Binding
        ========================================================================== */
     function bindEvents() {
+        // Notification permission toggle (only on explicit user click)
+        if (dom.notifyToggleBtn) {
+            dom.notifyToggleBtn.addEventListener('click', requestNotificationPermission);
+        }
+
         // Theme toggle
         dom.themeToggleBtn.addEventListener('click', toggleTheme);
 
@@ -772,8 +985,11 @@
     function init() {
         initTheme();
         loadTasks();
+        updateNotifyButtonState();
         bindEvents();
         renderAll();
+        checkReminders();
+        startReminderLoop();
     }
 
     if (document.readyState === 'loading') {

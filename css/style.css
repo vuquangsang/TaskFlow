@@ -288,6 +288,18 @@ body {
     border-color: var(--text-muted);
 }
 
+.btn-icon.is-active {
+    background-color: var(--primary-soft);
+    color: var(--primary);
+    border-color: var(--primary);
+}
+
+.btn-icon.is-denied {
+    background-color: var(--danger-soft);
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
 .btn-link {
     background: none;
     border: none;
@@ -706,6 +718,16 @@ body {
 .badge-status-Completed {
     background-color: var(--status-completed-bg);
     color: var(--status-completed-text);
+}
+
+.badge-reminder {
+    background-color: var(--info-soft);
+    color: var(--info-text);
+}
+
+[data-theme="dark"] .badge-reminder {
+    background-color: rgba(59, 130, 246, 0.16);
+    color: #93c5fd;
 }
 
 .task-actions {
